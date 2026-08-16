@@ -1,6 +1,6 @@
 {
   "name": "nova-star",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Nova Star: peer-to-peer chat for the computers on your own network. Every copy is its own node.",
   "type": "module",
   "main": "electron/main.cjs",
