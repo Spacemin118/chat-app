@@ -1,0 +1,47 @@
+{
+  "name": "light-chat",
+  "version": "1.4.0",
+  "description": "Lightweight local-first chat app (Express + WebSocket) packaged with Electron.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "dist": "electron-builder",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "electron": "~43.3.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0"
+  },
+  "build": {
+    "appId": "com.lightchat.app",
+    "productName": "Light Chat",
+    "files": [
+      "electron/**",
+      "public/**",
+      "server.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
