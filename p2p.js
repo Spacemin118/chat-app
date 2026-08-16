@@ -213,6 +213,8 @@ export class PeerNetwork extends EventEmitter {
     this.pending.set(key, true);
     const socket = new WebSocket(`ws://${entry.address}:${entry.port}`, { maxPayload: MAX_LINK_PAYLOAD });
     socket.remoteKey = key;
+    socket.remoteAddress = entry.address;
+    socket.remotePort = entry.port;
     socket.on("open", () => {
       this.pending.delete(key);
       this.#adopt(socket, { dialed: true });
@@ -333,7 +335,10 @@ export class PeerNetwork extends EventEmitter {
 
     if (packet.t === "presence") {
       const users = Array.isArray(packet.users) ? packet.users : [];
-      this.remoteUsers.set(socket.peerId, users.map(user => ({ ...user, peerId: socket.peerId, nodeName: socket.peerName })));
+      this.remoteUsers.set(
+        socket.peerId,
+        users.map(user => ({ ...user, peerId: socket.peerId, nodeName: socket.peerName, local: false }))
+      );
       this.emit("presence");
     }
   }
@@ -357,8 +362,8 @@ export class PeerNetwork extends EventEmitter {
     const known = this.directory.get(socket.peerId);
     this.directory.set(socket.peerId, {
       name: socket.peerName,
-      address: known?.address || socket._socket?.remoteAddress || null,
-      port: known?.port || null,
+      address: known?.address || socket.remoteAddress || socket._socket?.remoteAddress || null,
+      port: known?.port || socket.remotePort || null,
       lastSeen: Date.now()
     });
 
