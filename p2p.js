@@ -286,6 +286,9 @@ export class PeerNetwork extends EventEmitter {
       peerId: this.peerId,
       name: this.nodeName,
       room: this.room,
+      // The listen port, so the side that accepted the link can show where the
+      // peer can be reached rather than just its source address.
+      port: this.port,
       nonce: socket.nonce,
       requiresKey: Boolean(this.roomKey)
     });
@@ -327,6 +330,7 @@ export class PeerNetwork extends EventEmitter {
       }
       socket.peerId = packet.peerId;
       socket.peerName = String(packet.name || "Peer").slice(0, 40);
+      if (Number.isInteger(packet.port)) socket.remotePort = packet.port;
       socket.theirNonce = String(packet.nonce || "");
       if (this.roomKey) {
         safeSend(socket, { t: "auth", proof: this.#proof(socket.theirNonce, socket.nonce) });

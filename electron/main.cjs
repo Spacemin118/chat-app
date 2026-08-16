@@ -16,6 +16,13 @@ if (!ALLOW_MULTI && !app.requestSingleInstanceLock()) {
   return;
 }
 
+// Each instance needs its own profile: the peer identity lives in the data dir,
+// and two nodes sharing one identity ignore each other's announcements.
+if (ALLOW_MULTI) {
+  app.setPath("userData", `${app.getPath("userData")}-${process.pid}`);
+  app.setPath("sessionData", app.getPath("userData"));
+}
+
 async function startServer() {
   process.env.LIGHT_CHAT_HOST = HOST;
   process.env.LIGHT_CHAT_TOKEN = TOKEN;

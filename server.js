@@ -435,18 +435,20 @@ function announceNetwork() {
 }
 
 // Attachments travel inline over the peer link: a URL only means something on
-// the node that stored the bytes.
+// the node that stored the bytes. Relayed history keeps the node that first
+// sent each message, so it is not re-badged with whoever passed it along.
 function packForMesh(item) {
-  if (!item.file?.url) return { ...item, node: NODE_NAME };
+  const origin = item.node || NODE_NAME;
+  if (!item.file?.url) return { ...item, node: origin };
   try {
     const filePath = path.join(uploadsDir, path.basename(decodeURIComponent(item.file.url)));
     const stats = fs.statSync(filePath);
     if (stats.size > MAX_RELAY_FILE_SIZE) {
-      return { ...item, node: NODE_NAME, file: { ...item.file, url: null, unavailable: true } };
+      return { ...item, node: origin, file: { ...item.file, url: null, unavailable: true } };
     }
-    return { ...item, node: NODE_NAME, file: { ...item.file, url: null, data: fs.readFileSync(filePath).toString("base64") } };
+    return { ...item, node: origin, file: { ...item.file, url: null, data: fs.readFileSync(filePath).toString("base64") } };
   } catch {
-    return { ...item, node: NODE_NAME, file: { ...item.file, url: null, unavailable: true } };
+    return { ...item, node: origin, file: { ...item.file, url: null, unavailable: true } };
   }
 }
 
