@@ -22,7 +22,9 @@ Start the app on two computers on the same network and they find each other with
 2. Nodes announce `{peerId, name, room, port}` every 3 seconds - to `239.255.41.234:41234` on every IPv4 adapter, and to each adapter's subnet broadcast address, so discovery still works where multicast is filtered. Both sides dial (a firewall often blocks inbound on one machine only) and the duplicate link loses a deterministic tie-break, so each pair keeps exactly one.
 3. Chat messages, typing and presence are flooded across the links and deduplicated by message id, so a node reaches peers it never dialed itself.
 4. A node that has just linked receives the last 100 messages from its new peer, so joining late is not an empty room.
-5. Attachments travel inline over the link (up to `LIGHT_CHAT_MAX_RELAY_SIZE`) and are stored by each receiving node; larger files stay on the sender's machine and show up as "Not shared".
+5. Small attachments travel inline over the link (up to `LIGHT_CHAT_MAX_RELAY_SIZE`) and are stored by each receiving node.
+6. Bigger files are only advertised: the bytes stay on the sending computer until someone presses **Get file**, then stream across the direct link in 128 KB chunks with a progress bar. The two computers must be linked directly (both appear under Nearby nodes).
+7. Nicknames, mutes and blocks are per-computer: there are no accounts, so each node decides for itself who it wants to see. Open them with **Manage** next to "In this room".
 
 Set `LIGHT_CHAT_ROOM_KEY` to the same passphrase on every node to keep strangers out: peers prove knowledge of it with an HMAC over both handshake nonces, and links without a matching key are refused.
 
@@ -38,7 +40,7 @@ The Windows installer adds firewall rules for UDP `41234` and TCP `41235-41254`.
 | `LIGHT_CHAT_ROOM` | `lan` | Only nodes with the same room name link up |
 | `LIGHT_CHAT_ROOM_KEY` | *(empty)* | Shared passphrase authenticating peer links |
 | `LIGHT_CHAT_NODE_NAME` | hostname | Name shown for this node in the mesh |
-| `LIGHT_CHAT_MAX_RELAY_SIZE` | `8388608` (8 MB) | Largest attachment relayed to other nodes |
+| `LIGHT_CHAT_MAX_RELAY_SIZE` | `1048576` (1 MB) | Largest attachment sent inline; bigger files are fetched on demand |
 | `LIGHT_CHAT_DISCOVERY_PORT` | `41234` | UDP discovery port |
 | `LIGHT_CHAT_DISCOVERY_GROUP` | `239.255.41.234` | Multicast group |
 | `PORT` | `3004` | HTTP/WebSocket port |

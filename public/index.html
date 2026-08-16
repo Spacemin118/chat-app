@@ -30,7 +30,10 @@
       </div>
 
       <div class="sidebar-section people-section">
-        <div class="section-label">In this room <span id="presenceCount">0</span></div>
+        <div class="section-label">
+          In this room <span id="presenceCount">0</span>
+          <button class="link-button" id="managePeopleButton" type="button">Manage</button>
+        </div>
         <div class="people-list" id="peopleList" aria-live="polite"></div>
       </div>
 
@@ -154,7 +157,21 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="peopleModal" hidden>
+    <div class="profile-modal people-modal" role="dialog" aria-modal="true" aria-labelledby="peopleTitle">
+      <div class="modal-header">
+        <div><span class="eyebrow">CREW</span><h2 id="peopleTitle">Manage people</h2></div>
+        <button class="icon-button" id="closePeopleModal" type="button" aria-label="Close">×</button>
+      </div>
+      <input class="profile-input" id="peopleSearch" maxlength="40" placeholder="Search people" aria-label="Search people">
+      <div class="managed-list" id="peopleManagerList"></div>
+      <p class="modal-note" id="peopleEmpty" hidden>Nobody has said hello yet. People show up here as soon as their computer joins.</p>
+      <p class="modal-note">Nicknames, mutes and blocks live on this computer only - nothing is sent to anyone else.</p>
+    </div>
+  </div>
+
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="/avatars.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

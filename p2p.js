@@ -12,10 +12,14 @@ const ANNOUNCE_INTERVAL = 3000;
 const PEER_TTL = 12_000;
 const HANDSHAKE_TIMEOUT = 8000;
 const SEEN_LIMIT = 4000;
-// Peers exchange whole attachments inline, so the link payload has to be
-// comfortably larger than the biggest file we are willing to relay.
-export const MAX_RELAY_FILE_SIZE = Number(process.env.LIGHT_CHAT_MAX_RELAY_SIZE || 8 * 1024 * 1024);
-const MAX_LINK_PAYLOAD = MAX_RELAY_FILE_SIZE * 2 + 1024 * 1024;
+// Small attachments ride along inside the chat message so they simply appear.
+// Anything bigger is fetched on demand, chunk by chunk, from the node that has
+// the bytes - a 2 GB video must never sit in one WebSocket frame.
+export const MAX_RELAY_FILE_SIZE = Number(process.env.LIGHT_CHAT_MAX_RELAY_SIZE || 1024 * 1024);
+export const FILE_CHUNK_SIZE = 128 * 1024;
+const MAX_LINK_PAYLOAD = Math.max(MAX_RELAY_FILE_SIZE * 2, FILE_CHUNK_SIZE * 4) + 1024 * 1024;
+// Stop reading ahead when a slow link has this much still queued.
+export const LINK_BACKPRESSURE = 4 * 1024 * 1024;
 
 function readIdentity(dataDir) {
   const file = path.join(dataDir, "identity.json");
@@ -55,6 +59,8 @@ function interfaces() {
 export function localAddresses() {
   return interfaces().map(entry => entry.address);
 }
+
+const FILE_PACKETS = new Set(["file-req", "file-chunk", "file-err"]);
 
 function safeSend(socket, payload) {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -377,6 +383,30 @@ export class PeerNetwork extends EventEmitter {
       return;
     }
 
+    // File transfers are addressed to one node instead of flooded: only the
+    // node holding the bytes answers, and only the asker gets the chunks.
+    if (FILE_PACKETS.has(packet.t)) {
+      if (packet.to !== this.peerId) {
+        const onward = this.links.get(packet.to);
+        if (onward?.handshakeDone) safeSend(onward, packet);
+        return;
+      }
+      if (packet.t === "file-req") {
+        this.emit("file-request", { peerId: socket.peerId, reqId: String(packet.reqId || ""), fileId: String(packet.fileId || "") });
+      } else if (packet.t === "file-chunk") {
+        this.emit("file-chunk", {
+          peerId: socket.peerId,
+          reqId: String(packet.reqId || ""),
+          seq: Number(packet.seq),
+          last: Boolean(packet.last),
+          data: String(packet.data || "")
+        });
+      } else {
+        this.emit("file-error", { reqId: String(packet.reqId || ""), message: String(packet.message || "Transfer failed.") });
+      }
+      return;
+    }
+
     if (packet.t === "presence") {
       const users = Array.isArray(packet.users) ? packet.users : [];
       this.remoteUsers.set(
@@ -441,6 +471,28 @@ export class PeerNetwork extends EventEmitter {
 
   publishPresence(users) {
     this.#relay({ t: "presence", users }, null);
+  }
+
+  /** Ask one node for the bytes behind a large attachment. */
+  requestFile(peerId, fileId, reqId) {
+    return this.sendFilePacket(peerId, { t: "file-req", reqId, fileId });
+  }
+
+  /** Send one addressed transfer packet; false means the node is unreachable. */
+  sendFilePacket(peerId, packet) {
+    const socket = this.links.get(peerId);
+    if (!socket?.handshakeDone || socket.readyState !== WebSocket.OPEN) return false;
+    safeSend(socket, { ...packet, to: peerId, from: this.peerId });
+    return true;
+  }
+
+  /** Bytes still queued on a link, so a sender can pace a large transfer. */
+  bufferedFor(peerId) {
+    return this.links.get(peerId)?.bufferedAmount ?? 0;
+  }
+
+  isLinked(peerId) {
+    return Boolean(this.links.get(peerId)?.handshakeDone);
   }
 
   /** Hand a newcomer our recent history so late joiners are not empty. */

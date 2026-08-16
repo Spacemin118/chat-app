@@ -6,7 +6,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { PeerNetwork, MAX_RELAY_FILE_SIZE } from "./p2p.js";
+import { PeerNetwork, MAX_RELAY_FILE_SIZE, FILE_CHUNK_SIZE, LINK_BACKPRESSURE } from "./p2p.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3004);
@@ -22,6 +22,8 @@ const MESSAGE_BURST = 20;
 const MESSAGE_REFILL_PER_SECOND = 5;
 const HEARTBEAT_INTERVAL = 30_000;
 const HISTORY_SYNC_LIMIT = 100;
+// A peer that goes quiet mid-transfer must not leave a half file behind.
+const TRANSFER_TIMEOUT = 30_000;
 
 // Peer-to-peer mode: every participant runs this same app, the nodes find each
 // other on the LAN and gossip messages directly. No node is "the server".
@@ -209,13 +211,18 @@ function storeBuffer(buffer, originalName) {
   const storedName = `${crypto.randomUUID()}-${safeName.replace(/\.[^.]{1,10}$/, "")}`;
   const tempPath = path.join(uploadsDir, storedName);
   fs.writeFileSync(tempPath, buffer);
+  return finalizeStored(tempPath, storedName, safeName, buffer.length);
+}
+
+// Rename a finished upload onto an extension that matches its actual bytes.
+function finalizeStored(tempPath, storedName, safeName, size) {
   const imageType = sniffImageType(tempPath);
   const finalName = `${storedName}${imageType ? EXTENSION_FOR_TYPE.get(imageType) : ".bin"}`;
   fs.renameSync(tempPath, path.join(uploadsDir, finalName));
   return {
     url: `/uploads/${encodeURIComponent(finalName)}`,
     name: safeName,
-    size: buffer.length,
+    size,
     type: imageType || "application/octet-stream"
   };
 }
@@ -400,10 +407,23 @@ wss.on("connection", socket => {
         active: Boolean(message.active)
       };
       broadcast(payload, { except: socket });
-      network?.publishTyping(payload);
+      // Remote nodes need the origin so a local mute lands on the right person.
+      network?.publishTyping({ ...payload, node: NODE_NAME });
     }
 
     if (message.type === "profile") syncPresence();
+
+    // Large attachments are pulled on demand from the node that has them.
+    if (message.type === "fetch-file") {
+      const item = messages.find(entry => entry.id === String(message.id || ""));
+      if (!item?.file?.transfer?.origin) {
+        socket.send(JSON.stringify({ type: "error", message: "That file is not available any more." }));
+        return;
+      }
+      if (item.file.url) return;
+      const error = startTransfer(item);
+      if (error) socket.send(JSON.stringify({ type: "error", message: error }));
+    }
 
     // The UI is loopback-only, so a manual dial can be triggered from it for
     // peers that multicast never reaches (routed subnets, VPN links).
@@ -439,16 +459,28 @@ function announceNetwork() {
 // sent each message, so it is not re-badged with whoever passed it along.
 function packForMesh(item) {
   const origin = item.node || NODE_NAME;
-  if (!item.file?.url) return { ...item, node: origin };
+  if (!item.file) return { ...item, node: origin };
+  // Nothing stored here: pass on whoever does hold the bytes.
+  if (!item.file.url) return { ...item, node: origin, file: { ...item.file, data: undefined } };
   try {
-    const filePath = path.join(uploadsDir, path.basename(decodeURIComponent(item.file.url)));
-    const stats = fs.statSync(filePath);
+    const storedName = path.basename(decodeURIComponent(item.file.url));
+    const stats = fs.statSync(path.join(uploadsDir, storedName));
     if (stats.size > MAX_RELAY_FILE_SIZE) {
-      return { ...item, node: origin, file: { ...item.file, url: null, unavailable: true } };
+      // Too big for one frame: advertise it instead, and serve the chunks to
+      // whoever asks. We hold the bytes, so point the offer at this node.
+      return {
+        ...item,
+        node: origin,
+        file: { ...item.file, url: null, data: undefined, transfer: { fileId: storedName, origin: network?.peerId || null } }
+      };
     }
-    return { ...item, node: origin, file: { ...item.file, url: null, data: fs.readFileSync(filePath).toString("base64") } };
+    return {
+      ...item,
+      node: origin,
+      file: { ...item.file, url: null, transfer: undefined, data: fs.readFileSync(path.join(uploadsDir, storedName)).toString("base64") }
+    };
   } catch {
-    return { ...item, node: origin, file: { ...item.file, url: null, unavailable: true } };
+    return { ...item, node: origin, file: { ...item.file, url: null, data: undefined, unavailable: true } };
   }
 }
 
@@ -476,16 +508,163 @@ function unpackFromMesh(item) {
       }
     }
   }
+  const offer = file.transfer;
+  const fetchable =
+    offer && typeof offer.fileId === "string" && typeof offer.origin === "string"
+      ? { fileId: path.basename(offer.fileId).slice(0, 200), origin: offer.origin.slice(0, 64) }
+      : null;
   return {
     ...base,
     file: {
       url: null,
-      unavailable: true,
+      // A fetchable file is not missing, it just still lives on the other node.
+      unavailable: !fetchable,
+      transfer: fetchable,
       name: sanitizeFileName(file.name),
       size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
       type: String(file.type || "application/octet-stream").slice(0, 80)
     }
   };
+}
+
+// --- Large attachments -----------------------------------------------------
+
+// Files above the inline limit stay put until somebody asks for them, then
+// travel as a stream of chunks over the direct link to their node.
+const incoming = new Map(); // reqId -> in-progress download
+
+const STORED_NAME = /^[A-Za-z0-9._%()-]{1,200}$/;
+
+async function serveFile(peerId, reqId, fileId) {
+  const fail = message => network?.sendFilePacket(peerId, { t: "file-err", reqId, message });
+  if (!STORED_NAME.test(fileId)) return fail("Unknown file.");
+  let handle;
+  try {
+    handle = await fs.promises.open(path.join(uploadsDir, fileId), "r");
+  } catch {
+    return fail("That file is no longer on the other computer.");
+  }
+  try {
+    const { size } = await handle.stat();
+    const buffer = Buffer.alloc(FILE_CHUNK_SIZE);
+    let position = 0;
+    let seq = 0;
+    while (position < size) {
+      const { bytesRead } = await handle.read(buffer, 0, FILE_CHUNK_SIZE, position);
+      if (!bytesRead) break;
+      position += bytesRead;
+      const sent = network?.sendFilePacket(peerId, {
+        t: "file-chunk",
+        reqId,
+        seq: seq++,
+        last: position >= size,
+        data: buffer.subarray(0, bytesRead).toString("base64")
+      });
+      // The asker disconnected: stop reading rather than filling memory.
+      if (!sent) return;
+      await drainLink(peerId);
+    }
+  } catch {
+    fail("Could not read the file.");
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+// Let a slow link catch up instead of queueing the whole file in memory.
+function drainLink(peerId) {
+  return new Promise(resolve => {
+    const check = () => {
+      if (!network?.isLinked(peerId) || network.bufferedFor(peerId) < LINK_BACKPRESSURE) resolve();
+      else setTimeout(check, 50);
+    };
+    check();
+  });
+}
+
+function transferUpdate(entry, extra) {
+  broadcast({ type: "transfer", id: entry.messageId, name: entry.name, size: entry.size, received: entry.received, ...extra });
+}
+
+function abortTransfer(reqId, message) {
+  const entry = incoming.get(reqId);
+  if (!entry) return;
+  incoming.delete(reqId);
+  clearTimeout(entry.timer);
+  entry.stream.destroy();
+  fs.promises.unlink(entry.tempPath).catch(() => {});
+  transferUpdate(entry, { failed: true, message });
+}
+
+function armTransferTimeout(entry) {
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => abortTransfer(entry.reqId, "The other computer stopped responding."), TRANSFER_TIMEOUT);
+  entry.timer.unref?.();
+}
+
+function startTransfer(item) {
+  const offer = item.file.transfer;
+  if (!network?.isLinked(offer.origin)) return "That computer is not linked right now.";
+  if (item.file.size > MAX_FILE_SIZE) return `Files above ${formatLimit()} are not accepted.`;
+  for (const entry of incoming.values()) if (entry.messageId === item.id) return null;
+
+  const reqId = crypto.randomUUID();
+  const storedName = `${crypto.randomUUID()}-${sanitizeFileName(item.file.name).replace(/\.[^.]{1,10}$/, "")}`;
+  const tempPath = path.join(uploadsDir, storedName);
+  const entry = {
+    reqId,
+    messageId: item.id,
+    storedName,
+    tempPath,
+    stream: fs.createWriteStream(tempPath),
+    name: sanitizeFileName(item.file.name),
+    size: Number(item.file.size) || 0,
+    received: 0,
+    nextSeq: 0,
+    timer: null
+  };
+  entry.stream.on("error", () => abortTransfer(reqId, "Could not write the file to disk."));
+  incoming.set(reqId, entry);
+  armTransferTimeout(entry);
+  network.requestFile(offer.origin, offer.fileId, reqId);
+  transferUpdate(entry, { started: true });
+  return null;
+}
+
+function acceptChunk({ reqId, seq, last, data }) {
+  const entry = incoming.get(reqId);
+  if (!entry) return;
+  if (seq !== entry.nextSeq) return abortTransfer(reqId, "The transfer arrived out of order.");
+  entry.nextSeq += 1;
+  const buffer = Buffer.from(data, "base64");
+  entry.received += buffer.length;
+  if (entry.received > MAX_FILE_SIZE) return abortTransfer(reqId, "The file is larger than this computer accepts.");
+  entry.stream.write(buffer);
+  armTransferTimeout(entry);
+  if (!last) {
+    if (entry.nextSeq % 8 === 0) transferUpdate(entry, {});
+    return;
+  }
+  clearTimeout(entry.timer);
+  incoming.delete(reqId);
+  entry.stream.end(() => {
+    let stored;
+    try {
+      stored = finalizeStored(entry.tempPath, entry.storedName, entry.name, entry.received);
+    } catch {
+      fs.promises.unlink(entry.tempPath).catch(() => {});
+      transferUpdate(entry, { failed: true, message: "Could not save the file." });
+      return;
+    }
+    const item = messages.find(message => message.id === entry.messageId);
+    if (item) {
+      // Keep the offer: this node can now serve the file to the next asker too.
+      item.file = { ...stored, transfer: { fileId: path.basename(decodeURIComponent(stored.url)), origin: network?.peerId || null } };
+      saveMessages();
+    }
+    transferUpdate(entry, { done: true });
+    broadcast({ type: "file-ready", id: entry.messageId, file: item?.file || stored });
+  });
 }
 
 function acceptRemote(item) {
@@ -529,6 +708,11 @@ async function startNetwork() {
     node.publishPresence(localUsers());
     announceNetwork();
   });
+  node.on("file-request", ({ peerId, reqId, fileId }) => {
+    serveFile(peerId, reqId, fileId).catch(error => console.warn(`[p2p] ${error.message}`));
+  });
+  node.on("file-chunk", acceptChunk);
+  node.on("file-error", ({ reqId, message }) => abortTransfer(reqId, message));
   node.on("warning", message => console.warn(`[p2p] ${message}`));
 
   await node.start();
