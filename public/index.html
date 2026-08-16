@@ -8,13 +8,14 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div class="aurora" aria-hidden="true"><span class="aurora-a"></span><span class="aurora-b"></span><span class="aurora-c"></span></div>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Chat sidebar">
       <div class="brand">
         <div class="brand-mark">✦</div>
         <div class="brand-copy">
           <strong>Light Chat</strong>
-          <span>Private & lightweight</span>
+          <span>Peer-to-peer · no server</span>
         </div>
       </div>
 
@@ -32,7 +33,22 @@
         <div class="people-list" id="peopleList" aria-live="polite"></div>
       </div>
 
+      <div class="sidebar-section mesh-section">
+        <div class="section-label">
+          Nearby nodes <span id="peerCount">0</span>
+          <button class="link-button" id="addPeerButton" type="button">Add</button>
+        </div>
+        <div class="peer-list" id="peerList" aria-live="polite"></div>
+        <div class="mesh-empty" id="meshEmpty">Looking for other computers on your network…</div>
+      </div>
+
       <div class="sidebar-spacer"></div>
+
+      <div class="node-card" id="nodeCard">
+        <div class="node-line"><span>This node</span><strong id="nodeName">…</strong></div>
+        <div class="node-line"><span>Room</span><strong id="nodeRoom">…</strong></div>
+        <div class="node-line"><span>Mesh address</span><strong id="nodeAddress">…</strong></div>
+      </div>
 
       <div class="profile-card">
         <div class="avatar avatar-small" id="sidebarAvatar">G</div>
@@ -52,8 +68,9 @@
             <div class="title-row">
               <h1>General</h1>
               <span class="connection-pill connecting" id="status"><i></i> Connecting</span>
+              <span class="connection-pill mesh-pill" id="meshStatus"><i></i> Mesh off</span>
             </div>
-            <p>Real-time conversation</p>
+            <p id="conversationSubtitle">Direct peer-to-peer conversation</p>
           </div>
         </div>
         <div class="header-actions">
@@ -67,7 +84,7 @@
         <div class="empty-state" id="emptyState">
           <div class="empty-mark">✦</div>
           <strong>No messages yet</strong>
-          <span>Say hi to start the conversation.</span>
+          <span>Say hi - your message goes straight to the other computers.</span>
         </div>
         <div class="visually-hidden" id="announcer" role="status" aria-live="polite"></div>
         <button class="new-messages" id="newMessages" type="button">↓ New messages</button>
@@ -118,6 +135,21 @@
       <div class="avatar-grid" id="avatarGrid"></div>
       <p class="modal-note">Your name and avatar are stored locally in this browser.</p>
       <button class="primary-button" id="saveProfile" type="button">Save changes</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="peerModal" hidden>
+    <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="peerTitle">
+      <div class="modal-header">
+        <div><span class="eyebrow">MESH</span><h2 id="peerTitle">Add a node</h2></div>
+        <button class="icon-button" id="closePeerModal" type="button" aria-label="Close">×</button>
+      </div>
+      <label class="field-label" for="peerAddressInput">Address of the other computer</label>
+      <input class="profile-input" id="peerAddressInput" maxlength="64" placeholder="192.168.1.42">
+      <label class="field-label" for="peerPortInput">Mesh port</label>
+      <input class="profile-input" id="peerPortInput" maxlength="5" inputmode="numeric" placeholder="41235">
+      <p class="modal-note">Nodes on the same network find each other automatically. Add one by hand when discovery is blocked or the node lives on another subnet.</p>
+      <button class="primary-button" id="dialPeer" type="button">Connect</button>
     </div>
   </div>
 

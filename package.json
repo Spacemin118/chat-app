@@ -29,6 +29,7 @@
       "electron/**",
       "public/**",
       "server.js",
+      "p2p.js",
       "package.json"
     ],
     "directories": {

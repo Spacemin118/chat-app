@@ -27,6 +27,20 @@ const peopleListEl = document.getElementById("peopleList");
 const presenceCountEl = document.getElementById("presenceCount");
 const emptyStateEl = document.getElementById("emptyState");
 const announcerEl = document.getElementById("announcer");
+const meshStatusEl = document.getElementById("meshStatus");
+const peerListEl = document.getElementById("peerList");
+const peerCountEl = document.getElementById("peerCount");
+const meshEmptyEl = document.getElementById("meshEmpty");
+const nodeNameEl = document.getElementById("nodeName");
+const nodeRoomEl = document.getElementById("nodeRoom");
+const nodeAddressEl = document.getElementById("nodeAddress");
+const peerModal = document.getElementById("peerModal");
+const addPeerButton = document.getElementById("addPeerButton");
+const closePeerModal = document.getElementById("closePeerModal");
+const dialPeerButton = document.getElementById("dialPeer");
+const peerAddressInput = document.getElementById("peerAddressInput");
+const peerPortInput = document.getElementById("peerPortInput");
+const conversationSubtitle = document.getElementById("conversationSubtitle");
 
 // The desktop shell passes a per-launch token; the server rejects sockets and
 // uploads without it.
@@ -74,6 +88,7 @@ let lastRenderedUser = null;
 let lastRenderedDay = null;
 let isNearBottom = true;
 let clientId = null;
+let meshPort = null;
 const renderedIds = new Set();
 const typingUsers = new Map();
 
@@ -166,6 +181,11 @@ function connect() {
     if (data.type === "welcome") {
       clientId = data.clientId;
       if (Number.isFinite(data.maxFileSize)) maxFileSize = data.maxFileSize;
+      renderNetwork(data.network);
+    } else if (data.type === "network") {
+      renderNetwork(data.network);
+    } else if (data.type === "info") {
+      showToast(data.message || "");
     } else if (data.type === "history") {
       const known = renderedIds.size > 0;
       const incoming = known ? data.messages.filter(item => !renderedIds.has(item.id)) : data.messages;
@@ -274,6 +294,14 @@ function renderMessage(message) {
   time.className = "message-time";
   time.textContent = formatTime(message.time);
   head.append(user, time);
+  if (message.node) {
+    // Remote messages carry the node they were typed on, so it is always clear
+    // which computer a message came from.
+    const origin = document.createElement("span");
+    origin.className = "message-node";
+    origin.textContent = message.node;
+    head.appendChild(origin);
+  }
   content.appendChild(head);
 
   if (message.text) {
@@ -324,18 +352,74 @@ function renderPresence(users) {
     const avatar = document.createElement("div");
     avatar.className = "avatar person-avatar";
     paintAvatar(avatar, person.user, person.avatar);
+    const copy = document.createElement("div");
+    copy.className = "person-copy";
     const name = document.createElement("span");
     name.className = "person-name";
     name.textContent = person.id === clientId ? `${person.user} (you)` : person.user;
-    row.append(avatar, name);
+    copy.appendChild(name);
+    if (person.nodeName) {
+      const node = document.createElement("span");
+      node.className = "person-node";
+      node.textContent = person.local ? "this computer" : person.nodeName;
+      copy.appendChild(node);
+    }
+    row.append(avatar, copy);
     peopleListEl.appendChild(row);
   });
+}
+
+// The mesh panel is the whole point of the app: it shows the other computers
+// this node is talking to directly, with no server in between.
+function renderNetwork(network) {
+  if (!network) return;
+  meshPort = network.port || null;
+  const peers = network.peers || [];
+  const connected = peers.filter(peer => peer.connected);
+
+  nodeNameEl.textContent = network.nodeName || "–";
+  nodeRoomEl.textContent = network.secured ? `${network.room} · locked` : network.room || "–";
+  const address = (network.addresses || [])[0];
+  nodeAddressEl.textContent = network.enabled && address && network.port ? `${address}:${network.port}` : network.enabled ? "starting…" : "disabled";
+
+  peerCountEl.textContent = String(peers.length);
+  meshEmptyEl.hidden = peers.length > 0;
+  peerListEl.innerHTML = "";
+  peers.forEach(peer => {
+    const row = document.createElement("div");
+    row.className = `peer${peer.connected ? " connected" : ""}`;
+    const dot = document.createElement("i");
+    const copy = document.createElement("div");
+    copy.className = "peer-copy";
+    const name = document.createElement("span");
+    name.className = "peer-name";
+    name.textContent = peer.name;
+    const meta = document.createElement("span");
+    meta.className = "peer-meta";
+    const where = peer.address ? `${peer.address}${peer.port ? `:${peer.port}` : ""}` : "discovered";
+    meta.textContent = peer.connected ? `linked · ${where}` : `seen · ${where}`;
+    copy.append(name, meta);
+    row.append(dot, copy);
+    peerListEl.appendChild(row);
+  });
+
+  if (!network.enabled) {
+    meshStatusEl.className = "connection-pill mesh-pill";
+    meshStatusEl.innerHTML = "<i></i>Mesh off";
+    conversationSubtitle.textContent = "Local only – peer mesh disabled";
+    return;
+  }
+  meshStatusEl.className = `connection-pill mesh-pill ${connected.length ? "online" : "connecting"}`;
+  meshStatusEl.innerHTML = `<i></i>${connected.length ? `${connected.length} node${connected.length === 1 ? "" : "s"} linked` : "Searching"}`;
+  conversationSubtitle.textContent = connected.length
+    ? `Direct peer-to-peer · ${connected.map(peer => peer.name).join(", ")}`
+    : "Direct peer-to-peer · waiting for nodes";
 }
 
 function createFileCard(file) {
   const card = document.createElement("div");
   card.className = "file-card";
-  const isImage = file.type?.startsWith("image/");
+  const isImage = file.type?.startsWith("image/") && Boolean(file.url);
   if (isImage) {
     const img = document.createElement("img");
     img.className = "image-preview";
@@ -358,12 +442,21 @@ function createFileCard(file) {
   const size = document.createElement("span");
   size.textContent = `${formatSize(file.size)} · ${isImage ? "Image" : file.type || "File"}`;
   details.append(name, size);
-  const download = document.createElement("a");
-  download.className = "download-button";
-  download.href = file.url;
-  download.download = file.name;
-  download.textContent = "Download";
-  info.append(icon, details, download);
+  info.append(icon, details);
+  if (file.url) {
+    const download = document.createElement("a");
+    download.className = "download-button";
+    download.href = file.url;
+    download.download = file.name;
+    download.textContent = "Download";
+    info.appendChild(download);
+  } else {
+    // The sender's node kept the bytes: too large to hand across the mesh.
+    const note = document.createElement("span");
+    note.className = "file-unavailable";
+    note.textContent = "Not shared";
+    info.appendChild(note);
+  }
   card.appendChild(info);
   return card;
 }
@@ -584,6 +677,38 @@ saveProfile.addEventListener("click", () => {
   showToast("Profile updated.");
 });
 
+function openPeerModal() {
+  peerPortInput.value = peerPortInput.value || String(meshPort || 41235);
+  peerModal.hidden = false;
+  requestAnimationFrame(() => peerAddressInput.focus());
+}
+
+function closePeerDialog() {
+  peerModal.hidden = true;
+}
+
+addPeerButton.addEventListener("click", openPeerModal);
+closePeerModal.addEventListener("click", closePeerDialog);
+peerModal.addEventListener("click", event => { if (event.target === peerModal) closePeerDialog(); });
+peerAddressInput.addEventListener("keydown", event => { if (event.key === "Enter") dialPeerButton.click(); });
+peerPortInput.addEventListener("keydown", event => { if (event.key === "Enter") dialPeerButton.click(); });
+
+dialPeerButton.addEventListener("click", () => {
+  const address = peerAddressInput.value.trim();
+  const port = Number(peerPortInput.value.trim());
+  if (!address || !Number.isInteger(port)) {
+    showToast("Enter an address and a port.");
+    return;
+  }
+  if (socket?.readyState !== WebSocket.OPEN) {
+    showToast("Chat connection is not ready yet.");
+    return;
+  }
+  socket.send(JSON.stringify({ type: "connect-peer", address, port }));
+  peerAddressInput.value = "";
+  closePeerDialog();
+});
+
 const savedTheme = localStorage.getItem("chat-theme");
 if (savedTheme === "light") document.body.classList.add("light");
 updateThemeIcon();
@@ -629,6 +754,7 @@ document.addEventListener("click", () => toggleEmojiPanel(false));
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
   if (!emojiPanel.hidden) toggleEmojiPanel(false);
+  else if (!peerModal.hidden) closePeerDialog();
   else closeProfileModal();
 });
 renderEmojiPanel();

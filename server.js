@@ -4,7 +4,9 @@ import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { PeerNetwork, MAX_RELAY_FILE_SIZE } from "./p2p.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3004);
@@ -19,6 +21,16 @@ const MAX_HISTORY = 500;
 const MESSAGE_BURST = 20;
 const MESSAGE_REFILL_PER_SECOND = 5;
 const HEARTBEAT_INTERVAL = 30_000;
+const HISTORY_SYNC_LIMIT = 100;
+
+// Peer-to-peer mode: every participant runs this same app, the nodes find each
+// other on the LAN and gossip messages directly. No node is "the server".
+const P2P_ENABLED = process.env.LIGHT_CHAT_P2P !== "0";
+const P2P_PORT = Number(process.env.LIGHT_CHAT_P2P_PORT || 41235);
+const P2P_HOST = process.env.LIGHT_CHAT_P2P_HOST || "0.0.0.0";
+const ROOM = (process.env.LIGHT_CHAT_ROOM || "lan").slice(0, 40);
+const ROOM_KEY = process.env.LIGHT_CHAT_ROOM_KEY || "";
+const NODE_NAME = (process.env.LIGHT_CHAT_NODE_NAME || os.hostname() || "Node").slice(0, 40);
 
 const app = express();
 app.disable("x-powered-by");
@@ -111,10 +123,21 @@ function pruneUpload(url) {
   fs.promises.unlink(path.join(uploadsDir, name)).catch(() => {});
 }
 
+const messageIds = new Set(messages.map(item => item?.id).filter(Boolean));
+
+// Returns false when the id is already known: the mesh floods messages, so the
+// same item can arrive from several peers and across restarts.
 function appendMessage(item) {
+  if (messageIds.has(item.id)) return false;
+  messageIds.add(item.id);
   messages.push(item);
-  while (messages.length > MAX_HISTORY) pruneUpload(messages.shift()?.file?.url);
+  while (messages.length > MAX_HISTORY) {
+    const dropped = messages.shift();
+    messageIds.delete(dropped?.id);
+    pruneUpload(dropped?.file?.url);
+  }
   saveMessages();
+  return true;
 }
 
 function broadcast(message, { except } = {}) {
@@ -124,12 +147,24 @@ function broadcast(message, { except } = {}) {
   }
 }
 
-function presence() {
+function localUsers() {
   const users = [];
   for (const client of wss.clients) {
-    if (client.readyState === 1) users.push({ id: client.clientId, user: client.userName, avatar: client.avatarId });
+    if (client.readyState === 1) {
+      users.push({ id: client.clientId, user: client.userName, avatar: client.avatarId, nodeName: NODE_NAME, local: true });
+    }
   }
-  return { type: "presence", users };
+  return users;
+}
+
+function presence() {
+  return { type: "presence", users: [...localUsers(), ...(network?.presenceUsers() || [])] };
+}
+
+// Local roster changes are interesting to every other node in the mesh.
+function syncPresence() {
+  broadcast(presence());
+  network?.publishPresence(localUsers());
 }
 
 const EXTENSION_FOR_TYPE = new Map([
@@ -167,6 +202,28 @@ function sniffImageType(filePath) {
   }
 }
 
+// Shared by uploads and by attachments arriving over a peer link: the stored
+// extension - not any client-supplied label - decides how a file is served.
+function storeBuffer(buffer, originalName) {
+  const safeName = sanitizeFileName(originalName);
+  const storedName = `${crypto.randomUUID()}-${safeName.replace(/\.[^.]{1,10}$/, "")}`;
+  const tempPath = path.join(uploadsDir, storedName);
+  fs.writeFileSync(tempPath, buffer);
+  const imageType = sniffImageType(tempPath);
+  const finalName = `${storedName}${imageType ? EXTENSION_FOR_TYPE.get(imageType) : ".bin"}`;
+  fs.renameSync(tempPath, path.join(uploadsDir, finalName));
+  return {
+    url: `/uploads/${encodeURIComponent(finalName)}`,
+    name: safeName,
+    size: buffer.length,
+    type: imageType || "application/octet-stream"
+  };
+}
+
+function sanitizeFileName(name) {
+  return String(name || "file").replace(/[^a-zA-Z0-9._() -]/g, "_").slice(0, 180);
+}
+
 app.post("/api/upload", requireToken, (req, res) => {
   const originalName = String(req.headers["x-file-name"] || "file");
   const declaredSize = Number(req.headers["content-length"] || 0);
@@ -175,7 +232,7 @@ app.post("/api/upload", requireToken, (req, res) => {
     return res.status(413).json({ error: `Maximum file size is ${formatLimit()}.` });
   }
 
-  const safeName = originalName.replace(/[^a-zA-Z0-9._() -]/g, "_").slice(0, 180);
+  const safeName = sanitizeFileName(originalName);
   // The stored name carries no extension of its own; one is appended below
   // based on the sniffed content.
   const storedName = `${crypto.randomUUID()}-${safeName.replace(/\.[^.]{1,10}$/, "")}`;
@@ -282,13 +339,21 @@ wss.on("connection", socket => {
 
   socket.on("pong", () => { socket.isAlive = true; });
 
-  socket.send(JSON.stringify({ type: "welcome", clientId: socket.clientId, maxFileSize: MAX_FILE_SIZE }));
+  socket.send(
+    JSON.stringify({
+      type: "welcome",
+      clientId: socket.clientId,
+      maxFileSize: MAX_FILE_SIZE,
+      maxRelayFileSize: MAX_RELAY_FILE_SIZE,
+      network: networkStatus()
+    })
+  );
   socket.send(JSON.stringify({ type: "history", messages }));
-  broadcast(presence());
+  syncPresence();
 
   socket.on("close", () => {
     broadcast({ type: "typing", clientId: socket.clientId, user: socket.userName, active: false });
-    broadcast(presence());
+    syncPresence();
   });
 
   socket.on("message", raw => {
@@ -323,19 +388,152 @@ wss.on("connection", socket => {
       };
       appendMessage(item);
       broadcast(item);
-      broadcast(presence());
+      network?.publishMessage(packForMesh(item));
+      syncPresence();
     }
 
     if (message.type === "typing") {
-      broadcast(
-        { type: "typing", clientId: socket.clientId, user: socket.userName, active: Boolean(message.active) },
-        { except: socket }
-      );
+      const payload = {
+        type: "typing",
+        clientId: socket.clientId,
+        user: socket.userName,
+        active: Boolean(message.active)
+      };
+      broadcast(payload, { except: socket });
+      network?.publishTyping(payload);
     }
 
-    if (message.type === "profile") broadcast(presence());
+    if (message.type === "profile") syncPresence();
+
+    // The UI is loopback-only, so a manual dial can be triggered from it for
+    // peers that multicast never reaches (routed subnets, VPN links).
+    if (message.type === "connect-peer" && network) {
+      const address = String(message.address || "").trim();
+      const port = Number(message.port);
+      if (!/^[a-zA-Z0-9.:_-]{1,64}$/.test(address) || !Number.isInteger(port) || port < 1 || port > 65535) {
+        socket.send(JSON.stringify({ type: "error", message: "Enter a valid address and port." }));
+        return;
+      }
+      network.connectTo(address, port);
+      socket.send(JSON.stringify({ type: "info", message: `Dialling ${address}:${port}…` }));
+    }
   });
 });
+
+// --- Peer mesh -------------------------------------------------------------
+
+let network = null;
+
+function networkStatus() {
+  return network
+    ? { ...network.status(), enabled: true }
+    : { enabled: false, room: ROOM, secured: Boolean(ROOM_KEY), peers: [], addresses: [], nodeName: NODE_NAME };
+}
+
+function announceNetwork() {
+  broadcast({ type: "network", network: networkStatus() });
+}
+
+// Attachments travel inline over the peer link: a URL only means something on
+// the node that stored the bytes.
+function packForMesh(item) {
+  if (!item.file?.url) return { ...item, node: NODE_NAME };
+  try {
+    const filePath = path.join(uploadsDir, path.basename(decodeURIComponent(item.file.url)));
+    const stats = fs.statSync(filePath);
+    if (stats.size > MAX_RELAY_FILE_SIZE) {
+      return { ...item, node: NODE_NAME, file: { ...item.file, url: null, unavailable: true } };
+    }
+    return { ...item, node: NODE_NAME, file: { ...item.file, url: null, data: fs.readFileSync(filePath).toString("base64") } };
+  } catch {
+    return { ...item, node: NODE_NAME, file: { ...item.file, url: null, unavailable: true } };
+  }
+}
+
+function unpackFromMesh(item) {
+  const base = {
+    id: String(item.id || crypto.randomUUID()).slice(0, 64),
+    type: "message",
+    clientId: String(item.clientId || "").slice(0, 64),
+    user: String(item.user || "Guest").slice(0, MAX_NAME_LENGTH),
+    text: String(item.text || "").slice(0, MAX_TEXT_LENGTH),
+    avatar: String(item.avatar || "").slice(0, 20),
+    node: String(item.node || "").slice(0, MAX_NAME_LENGTH),
+    time: typeof item.time === "string" ? item.time : new Date().toISOString(),
+    file: null
+  };
+  const file = item.file;
+  if (!file || typeof file !== "object") return base;
+  if (typeof file.data === "string") {
+    const buffer = Buffer.from(file.data, "base64");
+    if (buffer.length && buffer.length <= MAX_RELAY_FILE_SIZE) {
+      try {
+        return { ...base, file: storeBuffer(buffer, file.name) };
+      } catch {
+        // Fall through to the "not available here" card below.
+      }
+    }
+  }
+  return {
+    ...base,
+    file: {
+      url: null,
+      unavailable: true,
+      name: sanitizeFileName(file.name),
+      size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
+      type: String(file.type || "application/octet-stream").slice(0, 80)
+    }
+  };
+}
+
+function acceptRemote(item) {
+  const message = unpackFromMesh(item);
+  if (!message.text && !message.file) return;
+  if (!appendMessage(message)) return;
+  broadcast(message);
+}
+
+async function startNetwork() {
+  if (!P2P_ENABLED) return null;
+  const node = new PeerNetwork({
+    dataDir,
+    nodeName: NODE_NAME,
+    room: ROOM,
+    roomKey: ROOM_KEY,
+    port: P2P_PORT,
+    host: P2P_HOST
+  });
+
+  node.on("message", acceptRemote);
+  node.on("history", items => {
+    let added = 0;
+    for (const item of items) {
+      const message = unpackFromMesh(item);
+      if ((message.text || message.file) && appendMessage(message)) added += 1;
+    }
+    if (!added) return;
+    messages.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    saveMessages();
+    broadcast({ type: "history", messages });
+  });
+  node.on("typing", payload => {
+    if (payload?.type === "typing") broadcast(payload);
+  });
+  node.on("presence", () => broadcast(presence()));
+  node.on("peers", () => announceNetwork());
+  node.on("link", ({ peerId }) => {
+    // Hand the newcomer our recent history so nobody joins into an empty room.
+    node.sendHistory(peerId, messages.slice(-HISTORY_SYNC_LIMIT).map(packForMesh));
+    node.publishPresence(localUsers());
+    announceNetwork();
+  });
+  node.on("warning", message => console.warn(`[p2p] ${message}`));
+
+  await node.start();
+  network = node;
+  announceNetwork();
+  return node;
+}
 
 // Drop half-open sockets (closed lid, dropped Wi-Fi) instead of broadcasting to
 // them forever.
@@ -352,7 +550,7 @@ const heartbeat = setInterval(() => {
 heartbeat.unref();
 
 export function start({ port = PORT, host = HOST } = {}) {
-  return new Promise((resolve, reject) => {
+  const listening = new Promise((resolve, reject) => {
     const onError = error => {
       server.off("listening", onListening);
       reject(
@@ -370,12 +568,37 @@ export function start({ port = PORT, host = HOST } = {}) {
     server.once("listening", onListening);
     server.listen(port, host);
   });
+
+  // A failed mesh (no multicast, blocked port) must never stop the local chat.
+  return listening.then(async info => {
+    const node = await startNetwork().catch(error => {
+      console.warn(`[p2p] ${error.message}`);
+      return null;
+    });
+    return { ...info, p2pPort: node?.port ?? null, peerId: node?.peerId ?? null };
+  });
+}
+
+export function stop() {
+  network?.stop();
+  network = null;
+  server.close();
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    stop();
+    process.exit(0);
+  });
 }
 
 // Only auto-start when run directly (`npm start`); Electron awaits start().
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   start().then(
-    ({ port, host }) => console.log(`Light Chat running at http://${host}:${port}`),
+    ({ port, host, p2pPort }) => {
+      console.log(`Light Chat running at http://${host}:${port}`);
+      if (p2pPort) console.log(`Peer mesh listening on ${P2P_HOST}:${p2pPort} (room "${ROOM}")`);
+    },
     error => {
       console.error(error.message);
       process.exit(1);
