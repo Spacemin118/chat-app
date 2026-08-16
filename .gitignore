@@ -1,7 +1,23 @@
-﻿*.exe
 node_modules/
 .env
 .env.*
 *.log
 dist/
 build/
+out/
+release/
+uploads/
+data/
+
+# Packaged Electron output must never be committed - build it with `npm run dist`.
+*.exe
+*.dll
+*.pak
+*.asar
+*.bin
+icudtl.dat
+version
+vk_swiftshader_icd.json
+LICENSES.chromium.html
+locales/
+resources/

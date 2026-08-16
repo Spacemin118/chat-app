@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b0f14">
+  <title>Light Chat</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Chat sidebar">
+      <div class="brand">
+        <div class="brand-mark">✦</div>
+        <div class="brand-copy">
+          <strong>Light Chat</strong>
+          <span>Private & lightweight</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">Workspace</div>
+        <button class="channel active" type="button">
+          <span class="channel-icon">#</span>
+          <span>General</span>
+          <span class="channel-count" id="messageCount">0</span>
+        </button>
+      </div>
+
+      <div class="sidebar-section people-section">
+        <div class="section-label">In this room <span id="presenceCount">0</span></div>
+        <div class="people-list" id="peopleList" aria-live="polite"></div>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <div class="profile-card">
+        <div class="avatar avatar-small" id="sidebarAvatar">G</div>
+        <div class="profile-copy">
+          <strong id="profileName">Guest</strong>
+          <span><i class="status-dot"></i> Online</span>
+        </div>
+        <button class="icon-button" id="profileButton" type="button" aria-label="Edit profile" title="Edit profile">•••</button>
+      </div>
+    </aside>
+
+    <main class="chat-panel">
+      <header class="chat-header">
+        <div class="conversation-title">
+          <div class="conversation-icon">#</div>
+          <div>
+            <div class="title-row">
+              <h1>General</h1>
+              <span class="connection-pill connecting" id="status"><i></i> Connecting</span>
+            </div>
+            <p>Real-time conversation</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button" id="themeButton" type="button" aria-label="Toggle theme" title="Toggle theme">☾</button>
+          <button class="icon-button" id="scrollButton" type="button" aria-label="Scroll to latest" title="Jump to latest">↓</button>
+        </div>
+      </header>
+
+      <section class="messages-wrap">
+        <div class="messages" id="messages"></div>
+        <div class="empty-state" id="emptyState">
+          <div class="empty-mark">✦</div>
+          <strong>No messages yet</strong>
+          <span>Say hi to start the conversation.</span>
+        </div>
+        <div class="visually-hidden" id="announcer" role="status" aria-live="polite"></div>
+        <button class="new-messages" id="newMessages" type="button">↓ New messages</button>
+      </section>
+
+      <div class="typing" id="typing" aria-live="polite"></div>
+
+      <form id="composer" class="composer">
+        <div id="dropZone" class="drop-zone" aria-hidden="true">
+          <div class="drop-icon">↓</div>
+          <strong>Drop files to upload</strong>
+          <span>Release anywhere in the chat</span>
+        </div>
+
+        <div id="fileQueue" class="file-queue" aria-live="polite"></div>
+
+        <div class="composer-box">
+          <div class="emoji-wrap">
+            <button class="icon-button emoji-button" id="emojiButton" type="button" title="Add emoji" aria-label="Add emoji" aria-expanded="false">☺</button>
+            <div class="emoji-panel" id="emojiPanel" role="menu" aria-label="Emoji picker" hidden></div>
+          </div>
+          <label class="attach-button icon-button" title="Attach files" aria-label="Attach files">
+            <span>＋</span>
+            <input id="file" type="file" multiple>
+          </label>
+          <textarea id="text" autocomplete="off" placeholder="Message #general" maxlength="5000" rows="1"></textarea>
+          <button id="sendButton" class="send-button" type="submit" aria-label="Send message" title="Send message">
+            <span>↑</span>
+          </button>
+        </div>
+        <div class="composer-hint"><span>Enter to send</span><span>Shift + Enter for a new line</span></div>
+      </form>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="profileModal" hidden>
+    <div class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+      <div class="modal-header">
+        <div><span class="eyebrow">PROFILE</span><h2 id="profileTitle">Your profile</h2></div>
+        <button class="icon-button" id="closeProfile" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="profile-preview">
+        <div class="avatar avatar-large" id="profileAvatar">G</div>
+      </div>
+      <label class="field-label" for="profileNameInput">Display name</label>
+      <input class="profile-input" id="profileNameInput" maxlength="40" placeholder="Your name">
+      <label class="field-label">Choose an avatar</label>
+      <div class="avatar-grid" id="avatarGrid"></div>
+      <p class="modal-note">Your name and avatar are stored locally in this browser.</p>
+      <button class="primary-button" id="saveProfile" type="button">Save changes</button>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
