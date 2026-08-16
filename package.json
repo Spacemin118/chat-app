@@ -7,7 +7,6 @@
   "license": "MIT",
   "scripts": {
     "start": "node server.js",
-    "lan": "node scripts/lan.js",
     "app": "electron .",
     "dist": "electron-builder",
     "lint": "eslint ."
@@ -30,7 +29,6 @@
       "electron/**",
       "public/**",
       "server.js",
-      "scripts/**",
       "package.json"
     ],
     "directories": {

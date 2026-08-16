@@ -5,7 +5,7 @@ export default [
   { ignores: ["node_modules/**", "release/**", "dist/**", "resources/**", "locales/**"] },
   js.configs.recommended,
   {
-    files: ["server.js", "scripts/**/*.js"],
+    files: ["server.js"],
     languageOptions: { ecmaVersion: 2023, sourceType: "module", globals: globals.node }
   },
   {
