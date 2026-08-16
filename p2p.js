@@ -34,14 +34,26 @@ function readIdentity(dataDir) {
   return identity;
 }
 
-export function localAddresses() {
-  const addresses = [];
+function broadcastAddress(address, netmask) {
+  const host = address.split(".").map(Number);
+  const mask = (netmask || "255.255.255.0").split(".").map(Number);
+  return host.map((part, index) => (part & mask[index]) | (~mask[index] & 255)).join(".");
+}
+
+/** Every usable IPv4 interface, with the subnet broadcast address for each. */
+function interfaces() {
+  const found = [];
   for (const entries of Object.values(os.networkInterfaces())) {
     for (const entry of entries || []) {
-      if (entry.family === "IPv4" && !entry.internal) addresses.push(entry.address);
+      if (entry.family !== "IPv4" || entry.internal) continue;
+      found.push({ address: entry.address, broadcast: broadcastAddress(entry.address, entry.netmask) });
     }
   }
-  return addresses;
+  return found;
+}
+
+export function localAddresses() {
+  return interfaces().map(entry => entry.address);
 }
 
 function safeSend(socket, payload) {
@@ -86,7 +98,7 @@ export class PeerNetwork extends EventEmitter {
     const http = await import("node:http");
     this.httpServer = http.createServer((req, res) => {
       res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Light Chat peer link: WebSocket only.\n");
+      res.end("Nova Star peer link: WebSocket only.\n");
     });
     this.httpServer.on("upgrade", (req, socket, head) => {
       this.wss.handleUpgrade(req, socket, head, ws => this.#adopt(ws, { dialed: false }));
@@ -134,10 +146,22 @@ export class PeerNetwork extends EventEmitter {
         socket.setMulticastTTL(1);
         // Several nodes may share one machine while testing, so keep loopback on.
         socket.setMulticastLoopback(true);
-        socket.addMembership(DISCOVERY_GROUP);
+        socket.setBroadcast(true);
       } catch (error) {
-        this.emit("warning", `Multicast unavailable: ${error.message}`);
+        this.emit("warning", `Discovery socket limited: ${error.message}`);
       }
+      // Machines routinely have several adapters (Wi-Fi, Ethernet, VPN, Hyper-V)
+      // and the default one is often not the one the other computers are on.
+      let joined = 0;
+      for (const entry of [{ address: undefined }, ...interfaces()]) {
+        try {
+          socket.addMembership(DISCOVERY_GROUP, entry.address);
+          joined += 1;
+        } catch {
+          // Already joined on this interface, or it does not support multicast.
+        }
+      }
+      if (!joined) this.emit("warning", "Multicast unavailable: relying on broadcast discovery.");
       this.#announce();
     });
 
@@ -157,7 +181,22 @@ export class PeerNetwork extends EventEmitter {
       room: this.room,
       port: this.port
     });
-    this.discovery.send(payload, DISCOVERY_PORT, DISCOVERY_GROUP, () => {});
+    const nics = interfaces();
+    // Multicast once per adapter, then repeat over subnet broadcast so nodes
+    // still find each other where multicast is filtered out.
+    for (const nic of nics) {
+      try {
+        this.discovery.setMulticastInterface(nic.address);
+      } catch {
+        // Adapter disappeared between the scan and the send.
+      }
+      this.discovery.send(payload, DISCOVERY_PORT, DISCOVERY_GROUP, () => {});
+    }
+    if (!nics.length) this.discovery.send(payload, DISCOVERY_PORT, DISCOVERY_GROUP, () => {});
+
+    for (const target of new Set([...nics.map(nic => nic.broadcast), "255.255.255.255"])) {
+      this.discovery.send(payload, DISCOVERY_PORT, target, () => {});
+    }
   }
 
   #onAnnounce(raw, rinfo) {
@@ -188,8 +227,9 @@ export class PeerNetwork extends EventEmitter {
     });
     if (!known) this.emit("peers", this.peerList());
 
-    // Exactly one side dials so the mesh does not end up with duplicate links.
-    if (this.peerId < packet.peerId) this.#dial(this.directory.get(packet.peerId));
+    // Both sides dial: a firewall often blocks inbound on one machine only, and
+    // #activate drops whichever duplicate link loses the tie-break.
+    if (!this.links.has(packet.peerId)) this.#dial(this.directory.get(packet.peerId));
   }
 
   #expirePeers() {

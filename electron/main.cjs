@@ -7,7 +7,11 @@ const HOST = "127.0.0.1";
 // Even on loopback, any local process could otherwise talk to the chat server.
 const TOKEN = crypto.randomBytes(24).toString("hex");
 
-if (!app.requestSingleInstanceLock()) {
+// A second copy on the same machine is normally a stray double-click, but it is
+// also how you try the mesh out on one PC, so it stays available behind a flag.
+const ALLOW_MULTI = process.env.NOVA_STAR_MULTI === "1" || process.argv.includes("--multi");
+
+if (!ALLOW_MULTI && !app.requestSingleInstanceLock()) {
   app.quit();
   return;
 }
@@ -51,7 +55,8 @@ async function createWindow() {
     minHeight: 600,
     backgroundColor: "#111418",
     autoHideMenuBar: true,
-    title: "Light Chat",
+    title: "Nova Star",
+    icon: path.join(__dirname, "..", "public", "nova-star.png"),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
 
@@ -72,7 +77,7 @@ async function createWindow() {
 
 app.whenReady().then(() =>
   createWindow().catch(error => {
-    dialog.showErrorBox("Light Chat could not start", error.message);
+    dialog.showErrorBox("Nova Star could not start", error.message);
     app.quit();
   })
 );

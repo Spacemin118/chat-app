@@ -41,6 +41,7 @@ button { border: 0; }
 .sidebar { display:flex; flex-direction:column; min-width:0; padding:18px 12px 12px; background:linear-gradient(180deg,rgba(13,18,24,.82),rgba(11,16,22,.9)); backdrop-filter:blur(22px); border-right:1px solid var(--border); }
 .brand { display:flex; align-items:center; gap:11px; padding:7px 8px 24px; }
 .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:linear-gradient(145deg,#6b98ff,#4774e8); box-shadow:0 8px 22px rgba(91,140,255,.25); font-size:17px; }
+.brand-logo { object-fit:cover; background:#0d1120; }
 .brand-copy { display:flex; flex-direction:column; min-width:0; }
 .brand-copy strong { font-size:14px; letter-spacing:-.01em; }
 .brand-copy span { margin-top:3px; font-size:10px; color:var(--muted-2); }

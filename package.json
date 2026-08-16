@@ -1,7 +1,7 @@
 {
-  "name": "light-chat",
-  "version": "1.4.0",
-  "description": "Lightweight local-first chat app (Express + WebSocket) packaged with Electron.",
+  "name": "nova-star",
+  "version": "1.5.0",
+  "description": "Nova Star: peer-to-peer chat for the computers on your own network. Every copy is its own node.",
   "type": "module",
   "main": "electron/main.cjs",
   "license": "MIT",
@@ -23,8 +23,8 @@
     "globals": "^17.11.0"
   },
   "build": {
-    "appId": "com.lightchat.app",
-    "productName": "Light Chat",
+    "appId": "com.novastar.app",
+    "productName": "Nova Star",
     "files": [
       "electron/**",
       "public/**",
@@ -33,10 +33,14 @@
       "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "assets"
     },
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "perMachine": true
     },
     "mac": {
       "target": "dmg"

@@ -596,7 +596,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   start().then(
     ({ port, host, p2pPort }) => {
-      console.log(`Light Chat running at http://${host}:${port}`);
+      console.log(`Nova Star running at http://${host}:${port}`);
       if (p2pPort) console.log(`Peer mesh listening on ${P2P_HOST}:${p2pPort} (room "${ROOM}")`);
     },
     error => {

@@ -1,6 +1,6 @@
-# Light Chat
+# Nova Star
 
-A peer-to-peer chat app for the computers on your own network. Every participant runs the same app, and every copy is its own node: it serves the UI to its own user on loopback, announces itself over UDP multicast, and links directly to the other nodes it finds. There is no central server - close any node and the rest keep talking.
+A peer-to-peer chat app for the computers on your own network. Every participant runs the same app, and every copy is its own node: it serves the UI to its own user on loopback, announces itself over the LAN, and links directly to the other nodes it finds. There is no central server - close any node and the rest keep talking.
 
 ## Run
 
@@ -19,14 +19,14 @@ Start the app on two computers on the same network and they find each other with
 ## How the mesh works
 
 1. Each node listens for peer links on `0.0.0.0:41235` and serves its own UI on `127.0.0.1:3004`. Only the peer protocol is exposed to the network - the UI never is.
-2. Nodes announce `{peerId, name, room, port}` to `239.255.41.234:41234` every 3 seconds. The node with the lower peer id dials, so each pair ends up with exactly one link.
+2. Nodes announce `{peerId, name, room, port}` every 3 seconds - to `239.255.41.234:41234` on every IPv4 adapter, and to each adapter's subnet broadcast address, so discovery still works where multicast is filtered. Both sides dial (a firewall often blocks inbound on one machine only) and the duplicate link loses a deterministic tie-break, so each pair keeps exactly one.
 3. Chat messages, typing and presence are flooded across the links and deduplicated by message id, so a node reaches peers it never dialed itself.
 4. A node that has just linked receives the last 100 messages from its new peer, so joining late is not an empty room.
 5. Attachments travel inline over the link (up to `LIGHT_CHAT_MAX_RELAY_SIZE`) and are stored by each receiving node; larger files stay on the sender's machine and show up as "Not shared".
 
 Set `LIGHT_CHAT_ROOM_KEY` to the same passphrase on every node to keep strangers out: peers prove knowledge of it with an HMAC over both handshake nonces, and links without a matching key are refused.
 
-When multicast is blocked (some corporate networks, routed subnets, VPNs), use **Nearby nodes -> Add** in the sidebar and dial the other computer's `address:41235` directly.
+The Windows installer adds firewall rules for UDP `41234` and TCP `41235-41254`. When discovery is blocked anyway (routed subnets, VPNs, client isolation on the Wi-Fi), use **Nearby nodes -> Add** in the sidebar and dial the other computer's `address:41235` directly - the sidebar prints this node's own address for that purpose.
 
 ## Configuration
 
@@ -62,6 +62,8 @@ On Windows PowerShell, run each node in its own terminal:
 $env:PORT="3004"; $env:LIGHT_CHAT_NODE_NAME="alpha"; $env:LIGHT_CHAT_DATA_DIR="$env:TEMP\alpha"; npm start
 $env:PORT="3005"; $env:LIGHT_CHAT_P2P_PORT="41236"; $env:LIGHT_CHAT_NODE_NAME="beta"; $env:LIGHT_CHAT_DATA_DIR="$env:TEMP\beta"; npm start
 ```
+
+The desktop app normally allows one copy per machine; start it with `--multi` (or `NOVA_STAR_MULTI=1`) to run a second window for the same reason.
 
 ## Serving the UI to other devices
 

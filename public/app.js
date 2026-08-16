@@ -48,24 +48,24 @@ const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
 
 let maxFileSize = 100 * 1024 * 1024;
 
-// Sample avatars everyone can pick from (no image files needed).
+// Nova Star crew: pick a sign from the sky, no image files needed.
 const AVATARS = [
-  { id: "fox",     emoji: "🦊", bg: "linear-gradient(145deg,#ffb257,#f4762a)" },
-  { id: "cat",     emoji: "🐱", bg: "linear-gradient(145deg,#ffd76e,#f5a623)" },
-  { id: "panda",   emoji: "🐼", bg: "linear-gradient(145deg,#e7ecf5,#aab6c8)" },
-  { id: "koala",   emoji: "🐨", bg: "linear-gradient(145deg,#b8c6da,#8496b0)" },
-  { id: "frog",    emoji: "🐸", bg: "linear-gradient(145deg,#7fe08a,#35b26a)" },
-  { id: "owl",     emoji: "🦉", bg: "linear-gradient(145deg,#c0a68a,#8a6b4f)" },
-  { id: "penguin", emoji: "🐧", bg: "linear-gradient(145deg,#9fb4ff,#4d6fe0)" },
-  { id: "unicorn", emoji: "🦄", bg: "linear-gradient(145deg,#f7a8ff,#a86bff)" },
-  { id: "robot",   emoji: "🤖", bg: "linear-gradient(145deg,#8fd7ff,#3a8fd6)" },
-  { id: "alien",   emoji: "👽", bg: "linear-gradient(145deg,#9df5d0,#2fbf94)" },
-  { id: "ninja",   emoji: "🥷", bg: "linear-gradient(145deg,#5b6577,#2d3440)" },
-  { id: "astro",   emoji: "🧑‍🚀", bg: "linear-gradient(145deg,#7f9cff,#3d55c9)" },
-  { id: "ghost",   emoji: "👻", bg: "linear-gradient(145deg,#dfe6f5,#a6b2cd)" },
-  { id: "dragon",  emoji: "🐲", bg: "linear-gradient(145deg,#7be3b6,#20a37a)" },
-  { id: "rocket",  emoji: "🚀", bg: "linear-gradient(145deg,#ff8fa3,#e0455f)" },
-  { id: "star",    emoji: "⭐", bg: "linear-gradient(145deg,#ffe27a,#f2b705)" }
+  { id: "nova",      emoji: "✨", bg: "linear-gradient(145deg,#a68bff,#5ce1e6)" },
+  { id: "star",      emoji: "⭐", bg: "linear-gradient(145deg,#ffe27a,#f2b705)" },
+  { id: "comet",     emoji: "☄️", bg: "linear-gradient(145deg,#ffb37a,#e0553f)" },
+  { id: "moon",      emoji: "🌙", bg: "linear-gradient(145deg,#cfd8ff,#8a94d6)" },
+  { id: "sun",       emoji: "🌞", bg: "linear-gradient(145deg,#ffd76e,#f5872a)" },
+  { id: "galaxy",    emoji: "🌌", bg: "linear-gradient(145deg,#6b5bff,#221a4d)" },
+  { id: "planet",    emoji: "🪐", bg: "linear-gradient(145deg,#ffc48f,#c07a3d)" },
+  { id: "earth",     emoji: "🌍", bg: "linear-gradient(145deg,#7fd7ff,#2f7fd6)" },
+  { id: "rocket",    emoji: "🚀", bg: "linear-gradient(145deg,#ff8fa3,#e0455f)" },
+  { id: "satellite", emoji: "🛰️", bg: "linear-gradient(145deg,#b8c6da,#6b7a94)" },
+  { id: "astro",     emoji: "🧑‍🚀", bg: "linear-gradient(145deg,#7f9cff,#3d55c9)" },
+  { id: "alien",     emoji: "👽", bg: "linear-gradient(145deg,#9df5d0,#2fbf94)" },
+  { id: "ufo",       emoji: "🛸", bg: "linear-gradient(145deg,#8fd7ff,#3a8fd6)" },
+  { id: "telescope", emoji: "🔭", bg: "linear-gradient(145deg,#c0a68a,#8a6b4f)" },
+  { id: "meteor",    emoji: "💫", bg: "linear-gradient(145deg,#f7a8ff,#a86bff)" },
+  { id: "shooting",  emoji: "🌠", bg: "linear-gradient(145deg,#5b6577,#2d3440)" }
 ];
 
 const EMOJIS = [
@@ -369,10 +369,33 @@ function renderPresence(users) {
   });
 }
 
+const startedAt = Date.now();
+// Discovery usually lands in a couple of seconds; if it has not, the cause is
+// almost always a firewall or a network that drops broadcast, so say so instead
+// of spinning on "looking…" forever.
+const SEARCH_GRACE = 20_000;
+
+let lastNetwork = null;
+// Nothing changes on the wire while a node sits alone, so refresh the panel on
+// a timer to let the hint appear.
+setInterval(() => {
+  if (lastNetwork && !meshEmptyEl.hidden) renderNetwork(lastNetwork);
+}, 5000);
+
+function searchHint(network, address) {
+  if (!network.enabled) return "Peer mesh is switched off.";
+  if (Date.now() - startedAt < SEARCH_GRACE) return "Looking for other computers on your network…";
+  const here = address && network.port ? `${address}:${network.port}` : "this computer's address";
+  return `No one found yet. On the other computer press Add and enter ${here}. `
+    + "If that fails too, allow Nova Star through Windows Firewall (UDP 41234, TCP 41235) "
+    + "and check both computers are on the same network.";
+}
+
 // The mesh panel is the whole point of the app: it shows the other computers
 // this node is talking to directly, with no server in between.
 function renderNetwork(network) {
   if (!network) return;
+  lastNetwork = network;
   meshPort = network.port || null;
   const peers = network.peers || [];
   const connected = peers.filter(peer => peer.connected);
@@ -384,6 +407,7 @@ function renderNetwork(network) {
 
   peerCountEl.textContent = String(peers.length);
   meshEmptyEl.hidden = peers.length > 0;
+  if (!peers.length) meshEmptyEl.textContent = searchHint(network, address);
   peerListEl.innerHTML = "";
   peers.forEach(peer => {
     const row = document.createElement("div");
