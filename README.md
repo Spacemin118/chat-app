@@ -27,10 +27,18 @@ Packaged binaries are **not** committed - build them with `npm run dist` and att
 ## Sharing the chat on a LAN
 
 ```bash
-LIGHT_CHAT_HOST=0.0.0.0 LIGHT_CHAT_TOKEN=$(openssl rand -hex 24) npm start
+npm run lan
 ```
 
-Then open `http://<host>:3004/?token=<the token>`. Without a token the server refuses to be useful to anyone but loopback clients - there are no user accounts, so an open port means an open chat room.
+This binds every interface, generates an access token (or reuses `LIGHT_CHAT_TOKEN` if set) and prints ready-to-share links like `http://192.168.1.24:3004/?token=<token>`. On Windows the port also has to be opened once, as Administrator:
+
+```powershell
+New-NetFirewallRule -DisplayName "Light Chat" -Direction Inbound -LocalPort 3004 -Protocol TCP -Action Allow
+```
+
+The equivalent manual form is `LIGHT_CHAT_HOST=0.0.0.0 LIGHT_CHAT_TOKEN=$(openssl rand -hex 24) npm start`. Without a token the server refuses to be useful to anyone but loopback clients - there are no user accounts, so an open port means an open chat room.
+
+`npm run app` (the desktop build) always stays on loopback with a private per-launch token, so guests cannot join that one - run `npm run lan` when you want company.
 
 ## Layout
 
